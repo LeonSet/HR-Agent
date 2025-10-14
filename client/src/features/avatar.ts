@@ -294,7 +294,7 @@ export async function startAvatar(style: 'soc' | 'ins') {
         await avatar.createStartAvatar({
           quality: AvatarQuality.High,
           avatarName: 'June_HR_public',
-          language: 'de-DE',
+          language: 'de',
           knowledgeBase,
         });
         sessionSuccessfullyStarted = true;
