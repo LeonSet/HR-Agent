@@ -34,5 +34,53 @@
     "entryDate": "2017-01-10",
     "weeklyHours": 40.00,
     "costCenter": "4720"
+  },
+  {
+    "ID": "c4d5e6f7-a8b9-c0d1-e2f3-a4b5c6d7e8f9",
+    "personnelNumber": "04237442",
+    "firstName": "Andrea",
+    "lastName": "Kirchhoff",
+    "email": "andrea.kirchhoff@noventis.de",
+    "department": "Marketing",
+    "position": "Marketing Managerin",
+    "entryDate": "2018-03-01",
+    "weeklyHours": 38.50,
+    "costCenter": "4730"
+  },
+  {
+    "ID": "d5e6f7a8-b9c0-d1e2-f3a4-b5c6d7e8f901",
+    "personnelNumber": "00056789",
+    "firstName": "Sarah",
+    "lastName": "Meier",
+    "email": "sarah.meier@noventis.de",
+    "department": "Vertrieb",
+    "position": "Account Managerin",
+    "entryDate": "2021-06-15",
+    "weeklyHours": 40.00,
+    "costCenter": "4740"
+  },
+  {
+    "ID": "e6f7a8b9-c0d1-e2f3-a4b5-c6d7e8f90112",
+    "personnelNumber": "00034567",
+    "firstName": "Markus",
+    "lastName": "Braun",
+    "email": "markus.braun@noventis.de",
+    "department": "Produktion",
+    "position": "Schichtleiter",
+    "entryDate": "2015-09-01",
+    "weeklyHours": 37.50,
+    "costCenter": "4750"
+  },
+  {
+    "ID": "f7a8b9c0-d1e2-f3a4-b5c6-d7e8f9011223",
+    "personnelNumber": "00078901",
+    "firstName": "Julia",
+    "lastName": "Fischer",
+    "email": "julia.fischer@noventis.de",
+    "department": "Recht",
+    "position": "Syndikusanw\u00e4ltin",
+    "entryDate": "2022-01-10",
+    "weeklyHours": 40.00,
+    "costCenter": "4760"
   }
 ]

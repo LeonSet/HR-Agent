@@ -1,7 +1,7 @@
 using { hr.agent as db } from '../db/schema';
 
 // ─── Chat Service ───────────────────────────────────────
-service ChatService @(path: '/api/chat') {
+service ChatService @(path: '/api/chat', impl: './chat-service.js') {
 
   entity Sessions as projection on db.ChatSessions;
   entity Messages as projection on db.ChatMessages;
@@ -10,16 +10,23 @@ service ChatService @(path: '/api/chat') {
     reply       : String;
     sessionId   : UUID;
     suggestions : array of String;
+    toolCalls   : array of {
+      tool   : String;
+      args   : LargeString;
+      result : LargeString;
+    };
   };
 }
 
 // ─── Document Service (vw-doc-ai Integration) ───────────
-service DocumentService @(path: '/api/documents') {
+service DocumentService @(path: '/api/documents', impl: './document-service.js') {
 
-  entity Documents as projection on db.Documents;
+  entity Documents     as projection on db.Documents;
   entity ExtractedFields as projection on db.ExtractedFields;
+  entity Cases         as projection on db.Cases;
+  entity CaseEvents    as projection on db.CaseEvents;
 
-  // Dokument hochladen → an vw-doc-ai weiterleiten
+  // Dokument hochladen → Intake (kein Schema, kein Workflow)
   action uploadAndExtract(
     fileName     : String,
     mimeType     : String,
@@ -41,11 +48,27 @@ service DocumentService @(path: '/api/documents') {
       rawValue   : String;
       page       : Integer;
     };
+    validation : {
+      documentType : String;
+      isValid      : Boolean;
+      issues       : array of String;
+      validChecks  : array of String;
+      fieldCount   : Integer;
+      businessChecks : array of String;
+    };
+  };
+
+  // Schema-gebundene Extraktion starten (Phase 2)
+  action startSchemaExtraction(documentId : UUID, documentType : String) returns {
+    documentId : UUID;
+    jobId      : String;
+    status     : String;
+    schemaName : String;
   };
 }
 
 // ─── HCM Service (simuliert) ────────────────────────────
-service HCMService @(path: '/api/hcm') {
+service HCMService @(path: '/api/hcm', impl: './hcm-service.js') {
 
   @readonly
   entity Employees as projection on db.Employees;

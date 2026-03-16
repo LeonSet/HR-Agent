@@ -5,14 +5,17 @@
   "dependencies": {
     "@sap/cds": "^9",
     "express": "^4",
-    "multer": "^1"
+    "multer": "^1",
+    "openai": "^6.29.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@cap-js/sqlite": "^2"
   },
   "scripts": {
-    "start": "cds-serve",
-    "dev": "cds watch",
+    "db:deploy": "cds deploy --to sqlite:db.sqlite",
+    "start": "npm run db:deploy && cds-serve",
+    "dev": "npm run db:deploy && cds watch",
     "dev:app": "cd app && npm run dev",
     "install:app": "cd app && npm install",
     "build:app": "cd app && npm run build"

@@ -1,20 +1,36 @@
 const API_BASE = '/api';
 
+export interface ToolCallInfo {
+  tool: string;
+  args: string;
+  result: string;
+}
+
 interface SendMessageResponse {
   reply: string;
   sessionId: string;
   suggestions: string[];
+  toolCalls?: ToolCallInfo[];
 }
 
 interface UploadResponse {
   documentId: string;
-  jobId: string;
+  caseId: string;
   status: string;
+  phase: string;
 }
 
 interface PollResponse {
   status: string;
   extractedData: ExtractedField[];
+  validation?: {
+    documentType: string;
+    isValid: boolean;
+    issues: string[];
+    validChecks: string[];
+    fieldCount: number;
+    businessChecks?: string[];
+  };
 }
 
 export interface ExtractedField {
@@ -36,12 +52,11 @@ export async function sendMessage(sessionId: string | null, message: string): Pr
   return res.json();
 }
 
-// ─── Document Upload ────────────────────────────────────
-export async function uploadDocument(file: File, documentType: string, schemaId?: string): Promise<UploadResponse> {
+// ─── Document Upload (Phase 1: Intake – kein Schema) ───
+export async function uploadDocument(file: File, sessionId?: string): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('documentType', documentType);
-  if (schemaId) formData.append('schemaId', schemaId);
+  if (sessionId) formData.append('sessionId', sessionId);
 
   const res = await fetch(`${API_BASE}/documents/upload`, {
     method: 'POST',

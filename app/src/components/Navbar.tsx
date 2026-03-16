@@ -5,7 +5,7 @@ export default function Navbar() {
     <header className="navbar">
       <div className="navbar-left">
         <div className="navbar-brand">
-          <span className="navbar-brand-title">NOVENTIS</span>
+          <span className="navbar-brand-title">VOLKSWAGEN</span>
           <span className="navbar-brand-subtitle">PERSONAL PORTAL</span>
         </div>
         <button className="icon-btn" title="Menü">

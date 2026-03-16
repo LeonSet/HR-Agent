@@ -13,15 +13,26 @@
  */
 
 const API_BASE_PATH = '/document-information-extraction/v1';
+const FETCH_TIMEOUT_MS = 15_000; // 15s Timeout für alle Netzwerk-Calls
 
 // ─── Token Cache ────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiry = 0;
 
+/**
+ * Fetch mit AbortController-Timeout
+ */
+function fetchWithTimeout(url, opts, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 function getConfig() {
+  const raw = process.env.VW_DOCAI_URL || 'https://vw-doc-ai-srv.cfapps.eu10-004.hana.ondemand.com';
   return {
-    backendUrl:   process.env.VW_DOCAI_URL          || 'https://vw-doc-ai-srv.cfapps.eu10-004.hana.ondemand.com',
-    xsuaaUrl:     process.env.VW_DOCAI_XSUAA_URL    || 'https://vw-ag-hr-digital-services-dev.authentication.eu10.hana.ondemand.com',
+    backendUrl:   raw.replace(/\/+$/, ''),
+    xsuaaUrl:     (process.env.VW_DOCAI_XSUAA_URL || 'https://vw-ag-hr-digital-services-dev.authentication.eu10.hana.ondemand.com').replace(/\/+$/, ''),
     clientId:     process.env.VW_DOCAI_CLIENT_ID     || '',
     clientSecret: process.env.VW_DOCAI_CLIENT_SECRET || '',
     appClientId:  process.env.VW_DOCAI_CLIENT_APP_ID || 'hr-agent',
@@ -43,7 +54,7 @@ async function getToken() {
   }
 
   const credentials = Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
-  const res = await fetch(`${cfg.xsuaaUrl}/oauth/token`, {
+  const res = await fetchWithTimeout(`${cfg.xsuaaUrl}/oauth/token`, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${credentials}`,
@@ -83,7 +94,7 @@ async function api(method, path, body) {
     opts.body = JSON.stringify(body);
   }
 
-  const res = await fetch(url, opts);
+  const res = await fetchWithTimeout(url, opts);
 
   // Token abgelaufen → einmal retry
   if (res.status === 401) {
@@ -91,7 +102,7 @@ async function api(method, path, body) {
     tokenExpiry = 0;
     const newToken = await getToken();
     opts.headers['Authorization'] = `Bearer ${newToken}`;
-    const retryRes = await fetch(url, opts);
+    const retryRes = await fetchWithTimeout(url, opts);
     return retryRes.json();
   }
 
@@ -123,15 +134,16 @@ async function uploadDocument(fileBuffer, fileName, mimeType, options = {}) {
     clientId: cfg.appClientId,
     documentType: options.documentType || 'custom',
     ...(options.schemaId && { schemaId: options.schemaId }),
+    ...(options.schemaName && { schemaName: options.schemaName }),
     ...(options.schemaVersion && { schemaVersion: options.schemaVersion }),
   }));
 
   const url = `${cfg.backendUrl}${API_BASE_PATH}/document/jobs`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}` },
     body: formData,
-  });
+  }, 30_000); // Upload bekommt 30s
 
   if (!res.ok) {
     const text = await res.text();
@@ -170,11 +182,14 @@ async function pollUntilDone(jobId, intervalMs = 3000, maxAttempts = 30) {
 }
 
 /**
- * Alle Jobs auflisten
+ * Alle Jobs auflisten (normalisiert verschachteltes Array)
  */
 async function listJobs() {
   const cfg = getConfig();
-  return api('GET', `/document/jobs?clientId=${encodeURIComponent(cfg.appClientId)}`);
+  const raw = await api('GET', `/document/jobs?clientId=${encodeURIComponent(cfg.appClientId)}`);
+  // API liefert { results: [[...]] } — verschachteltes Array normalisieren
+  const jobs = Array.isArray(raw.results?.[0]) ? raw.results[0] : (raw.results || []);
+  return { jobs };
 }
 
 /**
@@ -236,7 +251,7 @@ async function getSchema(schemaId) {
  */
 async function healthCheck() {
   const cfg = getConfig();
-  const res = await fetch(`${cfg.backendUrl}/health`);
+  const res = await fetchWithTimeout(`${cfg.backendUrl}/health`, {}, 5_000);
   return res.json();
 }
 
