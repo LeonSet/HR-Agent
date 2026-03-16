@@ -1,1 +1,1 @@
-# streaming-avatar-demo
+# HR-Agent-demo
