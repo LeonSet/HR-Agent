@@ -1,0 +1,99 @@
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 75px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  z-index: 1000;
+  background: var(--lm-glass-bg);
+  border-bottom: 1px solid var(--lm-glass-border);
+  box-shadow: 0 2px 10px var(--lm-glass-shadow);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.navbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.navbar-brand {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+}
+
+.navbar-brand-title {
+  color: var(--lm-text-color-on-glass);
+  font-size: 1.1rem;
+}
+
+.navbar-brand-subtitle {
+  color: var(--text-pale-color);
+  font-size: 0.5rem;
+  font-weight: 300;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.navbar-right-mobile {
+  display: none;
+}
+
+.circle-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: var(--cws-deep-blue);
+  color: var(--cws-neon);
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--grey-7);
+  background: transparent;
+  border: none;
+  padding: 0;
+  transition: background-color 0.2s;
+}
+
+.icon-btn i { font-size: 1.1rem; line-height: 1; }
+.icon-btn:hover { background-color: var(--black-10p); }
+
+@media (max-width: 768px) {
+  .navbar { padding: 0 1rem; }
+  .navbar-right { gap: 0.6rem; }
+  .circle-icon, .icon-btn { width: 28px; height: 28px; }
+  .circle-icon { font-size: 0.8rem; }
+  .icon-btn i { font-size: 1rem; }
+}
+
+@media (max-width: 480px) {
+  .navbar { padding: 0 0.75rem; height: 56px; gap: 1rem; }
+  .navbar-right { display: none; }
+  .navbar-right-mobile { display: flex; flex-direction: row; gap: 1rem; }
+}

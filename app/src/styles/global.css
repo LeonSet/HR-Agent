@@ -1,0 +1,93 @@
+/* ───────────────────────── Farb-Variablen ───────────────────────── */
+:root {
+  --cws-deep-blue: #002733;
+  --cws-green: #00806e;
+  --cws-green-rgb: 0, 128, 110;
+  --cws-neon: #c2fe06;
+  --cws-neon-rgb: 194, 254, 6;
+  --grey-6: #626364;
+  --grey-7: #727475;
+  --grey-9: #929495;
+  --grey-e: #e5e5e5;
+  --black-10p: rgba(0,0,0,.1);
+  --black-30p: rgba(0,0,0,.3);
+  --text-main-color: var(--cws-deep-blue);
+  --text-pale-color: var(--grey-7);
+  --list-bullet-color: var(--cws-green);
+  --button-bg-disabled: var(--grey-e);
+  --button-fg-disabled: var(--grey-7);
+  --scrollbar-thumb: var(--grey-9);
+  --scrollbar-track: var(--grey-e);
+  --link-color: var(--cws-green);
+  --link-hover-color: var(--cws-deep-blue);
+  --lm-body-bg-color: var(--grey-e);
+  --lm-glass-bg: rgba(255, 255, 255, 0.35);
+  --lm-glass-border: rgba(255, 255, 255, 0.5);
+  --lm-glass-shadow: rgba(0, 0, 0, 0.1);
+  --lm-text-color-on-glass: var(--cws-deep-blue);
+  --lm-input-bg: rgba(255, 255, 255, 0.35);
+  --lm-input-border: rgba(255, 255, 255, 0.5);
+  --lm-input-focus-border: var(--cws-neon);
+  --lm-input-focus-shadow: rgba(var(--cws-neon-rgb), 0.2);
+  --lm-button-glass-bg: var(--cws-neon);
+  --lm-button-glass-border: rgba(255, 255, 255, 0.6);
+  --lm-button-glass-fg: var(--cws-deep-blue);
+  --lm-button-hover-glass-bg: var(--cws-green);
+  --lm-button-hover-glass-fg: var(--cws-neon);
+  --lm-button-hover-glass-border: rgba(255, 255, 255, 0.6);
+}
+
+/* ───────────────────────── Reset & Basis ───────────────────────── */
+*, ::before, ::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  font-family: 'Inter', sans-serif;
+  font-weight: 300;
+  line-height: 1.5;
+  color: var(--text-main-color);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-x: hidden;
+  height: 100dvh;
+  position: relative;
+  z-index: 0;
+  padding-top: 75px;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url('/lightmode-back.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  filter: blur(3px);
+  transform: scale(1.02);
+  z-index: -1;
+}
+
+#root {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-height: 0;
+}
+
+a { color: var(--link-color); text-decoration: underline var(--link-color); transition: color .2s; }
+a:hover { color: var(--link-hover-color); text-decoration-color: var(--link-hover-color); }
+
+/* ───────── Mobile ───────── */
+@media (max-width: 480px) {
+  body {
+    padding-top: 60px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
