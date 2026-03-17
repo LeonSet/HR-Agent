@@ -19,6 +19,11 @@ entity ChatMessages : cuid, managed {
 entity Cases : cuid, managed {
   session      : Association to ChatSessions;
   status       : String enum { open; awaiting_input; processing; validated; completed; failed } default 'open';
+  // ─── Workflow State (DB-persistent, ersetzt [WORKFLOW_STATE:...] in Chat-Nachrichten) ───
+  productId    : String(50);               // Personalprodukt-ID (z.B. 'fibu24')
+  workflowState: String(50);              // State-Machine-Zustand (z.B. 'awaiting_confirmation')
+  workflowData : LargeString;             // JSON: akkumulierte Workflow-Daten (Extraktion, Employee, etc.)
+  // ─── Analyse-Metadaten ───
   documentType : String(100);              // bestätigter Dokumenttyp (null = noch nicht festgelegt)
   intent       : String(100);              // bestätigter Nutzer-Intent (null = noch nicht festgelegt)
   docTypeConfidence  : Decimal(3,2);       // 0.00–1.00, Sicherheit der Typ-Hypothese

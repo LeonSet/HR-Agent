@@ -7,7 +7,7 @@
     "express": "^4",
     "multer": "^1",
     "openai": "^6.29.0",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "@cap-js/sqlite": "^2"
@@ -17,6 +17,7 @@
     "start": "npm run db:deploy && cds-serve",
     "dev": "npm run db:deploy && cds watch",
     "dev:app": "cd app && npm run dev",
+    "test": "node --test tests/",
     "install:app": "cd app && npm install",
     "build:app": "cd app && npm run build"
   },

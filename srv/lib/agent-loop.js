@@ -1,283 +1,335 @@
 /**
  * Agent Loop – LLM ↔ Tools Orchestrierung
  *
- * Implementiert den ReAct-Pattern Agent-Loop:
- * 1. User-Nachricht + History + System-Prompt → LLM
- * 2. LLM entscheidet: Antwort ODER Tool-Call(s)
- * 3. Tool-Ergebnisse → zurück an LLM
- * 4. Repeat bis LLM eine finale Antwort gibt
+ * Zwei Modi:
+ *   1. Workflow-Modus: Personalprodukt aktiv → Workflow-Engine steuert deterministisch
+ *   2. LLM-Modus: Kein Workflow → LLM entscheidet frei (KB, Konversation)
  *
- * Unterstützt parallele Tool-Calls (OpenAI parallel function calling).
- * Max. Iterationen begrenzt, um Endlosschleifen zu verhindern.
+ * Das LLM steuert NIE den Prozessablauf eines Personalprodukts.
+ * Es wird nur für Dokumentanalyse und freie Konversation genutzt.
  */
 
 const { getToolDefinitions, executeTool } = require('./agent-tools');
-const { getWorkflowSummary } = require('./document-schemas');
+const { getProduct, matchProduct, listProducts, getProductChoices } = require('./personalprodukte/registry');
+const { executeWorkflowTurn, parseUploadMessage } = require('./workflow-engine');
+const stateStore = require('./state-store');
 
 const MAX_ITERATIONS = 8;
 
 /**
- * Baut den System-Prompt dynamisch zusammen.
- * Workflow-Tabelle wird aus der Registry generiert, damit neue Prozesse
- * automatisch im Prompt erscheinen.
+ * System-Prompt: Nur noch Persönlichkeit + KB-Modus + Format-Regeln.
+ * Die Prozesssteuerung läuft über die Workflow-Engine, nicht über Prompt-Instruktionen.
  */
 function buildSystemPrompt() {
-  const workflows = getWorkflowSummary();
-  const workflowTable = workflows.map(w =>
-    `| ${w.type} | ${w.label} | ${w.employeeField || '–'} | ${w.hcmAction || '–'} |`
-  ).join('\n');
+  const products = listProducts();
+  const productList = products.map(p => `- **${p.label}**`).join('\n');
 
-  return `Du bist ein professioneller HR-Agent bei der VOLKSWAGEN AG. Du arbeitest auf dem SAP HCM System und führst Personalprozesse durch.
+  return `Du bist ein professioneller HR-Agent bei der VOLKSWAGEN AG.
 
-## Deine drei Modi
+## Deine Aufgabe
+Du beantwortest HR-Fragen und hilfst Mitarbeitern bei Personalprozessen.
 
-### 1. Informationsmodus (Knowledge Base)
+## Wissensbasis
 Wenn ein Mitarbeiter eine Frage zu HR-Themen hat (Elternzeit, Teilzeit, Regelungen, Fristen):
 - Nutze **kb_search** um die Wissensbasis zu durchsuchen
 - Antworte auf Basis der gefundenen Informationen
-- Kein Tool-Calling über die KB hinaus nötig
+- Wenn die KB keine Treffer liefert, sage das ehrlich
 
-### 2. Dokumenten-Pipeline (mehrstufig)
-Wenn ein Dokument hochgeladen wurde, durchlaufe diese Pipeline:
-
-**Phase 1 – Generische Analyse (Hypothese):**
-Rufe **docai_analyze_document** auf. Das Ergebnis liefert:
-- Dokumenttyp-Kandidaten mit Confidence (0–1)
-- Intent-Kandidaten mit Confidence
-- Empfehlung, welche Informationen noch fehlen (needsUserInput)
-
-**Entscheidungslogik nach Phase 1:**
-- Wenn \`needsUserInput\` leer ist UND Confidence hoch (≥ 0.6): Teile dem Nutzer deine Hypothese mit und frage um Bestätigung.
-- Wenn \`needsUserInput\` "documentType" enthält: Frage den Nutzer gezielt nach dem Dokumenttyp.
-- Wenn \`needsUserInput\` "intent" enthält: Frage den Nutzer, was er mit dem Dokument tun möchte.
-- Wenn NUR ein Dokument hochgeladen wurde (Nutzer macht seinen intent nicht klar mit einer Nachricht): Stelle IMMER eine Rückfrage – starte KEINEN Workflow automatisch.
-
-**Widerspruch des Nutzers:**
-- Wenn der Nutzer deiner Hypothese widerspricht (z.B. "Anderer Dokumenttyp", "Nein", "Stimmt nicht"), akzeptiere das SOFORT. Rufe NICHT erneut docai_analyze_document auf – das liefert dasselbe Ergebnis.
-- Frage stattdessen direkt: "Welcher Dokumenttyp liegt vor?" und biete die verfügbaren Typen als Optionen an.
-- Nutze dafür die Workflow-Tabelle unten. Wiederhole NICHT deine vorherige Hypothese.
-
-**Phase 2 – Schema-gebundene Extraktion (erst nach Bestätigung):**
-Rufe **docai_start_extraction** auf mit dem bestätigten Dokumenttyp. ERST JETZT wird das vw-doc-ai Schema gebunden und die revisionsfähige Extraktion gestartet (Asynchron - Polling mindestens 4 sekunden warten mit abrufe der Ergebnisse in nächstem Schritt).
-
-**Phase 3 – Ergebnisse abrufen:**
-Rufe **docai_get_extraction** auf. Das Ergebnis enthält:
-- Status der Extraktion (wenn nicht DONE ergebnisse noch nicht enthalten)
-- Extrahierte Felder mit Konfidenzwerten (Source of Truth für den Prozess)
-- Cross-Validation (automatische Plausibilitätsprüfung)
-- Workflow-Kontext: employeeField, HCM-Aktion, Business-Checks
-
-**Phase 4 – Business-Validation:**
-- Identifiziere die Personalnummer aus dem Extraktionsergebnis oder frage den Nutzer.
-- Nutze **hcm_get_employee** (NICHT raten!).
-- Prüfe die Business-Checks gegen die HCM-Daten.
-
-**Phase 5 – Zusammenfassung & Freigabe:**
-- Fasse zusammen: Cross-Validation, Business-Validation, nächster Schritt.
-- Warte auf explizite Bestätigung des Nutzers.
-
-**Phase 6 – HCM-Aktion (nur nach Freigabe):**
-- Nutze **hcm_validate_action** dann **hcm_submit_action**.
-- Erst nach expliziter Bestätigung!
-
-### 3. Self-Service-Prozesse (ohne Dokument)
-Wenn der Nutzer einen HR-Prozess starten will (z.B. Elternzeit beantragen) ohne Dokument:
-- Erfasse die nötigen Informationen konversationell
-- Validiere mit **hcm_validate_action**
-- Reiche ein mit **hcm_submit_action** nach Bestätigung
-
-## Dokumenttyp → Workflow-Zuordnung
-
-Jeder Dokumenttyp hat einen fest definierten Prozess. KEIN Dokumenttyp funktioniert ohne Schema-Zuordnung mit der vw-doc-ai.
-
-| Dokumenttyp | Label | Mitarbeiter-Feld | HCM-Aktion |
-|---|---|---|---|
-${workflowTable}
-
-### Prozess-Details
-
-**Fibu24-Nachweis** (Fahrkarte / ÖPNV-Abo):
-- Zweck: Erstattung von Fahrtkosten (Jobticket, Deutschlandticket, Monatsabo)
-- vw-doc-ai Schema: Fibu24_Schema → extrahiert: Vorname, Nachname, Gültig ab Datum, Gültig bis Datum
-- HCM-Aktion: fibu24_erstattung (Personalnummer über Name im Dokument → hcm_get_employee)
-- Validierung: Gültigkeitszeitraum plausibel, Name stimmt mit MA überein, kein Doppelnachweis
-
-**Elternzeit-Antrag**:
-- Zweck: Elternzeit beantragen (BEEG)
-- Extrahierte Felder: Antragsteller, Personalnummer, Beginn/Ende Elternzeit, Kind-Geburtsdatum
-- HCM-Aktion: elternzeit
-- Validierung: Zeitraum max. 36 Monate, Geburtsdatum vor Beginn, MA aktiv
-
-**Krankmeldung / AU-Bescheinigung**:
-- Zweck: Arbeitsunfähigkeit melden
-- Extrahierte Felder: Patient-Name, AU-Beginn/Ende, Erst-/Folgebescheinigung, Arzt
-- HCM-Aktion: krankmeldung
-- Validierung: AU-Zeitraum, Überlappung mit Urlaub, 6-Wochen-Grenze
-
-**Reisekostenabrechnung**:
-- Zweck: Dienstreisekosten erstatten
-- Extrahierte Felder: Reisender, Reiseziel, Beginn/Ende, Gesamtbetrag, Kostenstelle
-- HCM-Aktion: reisekostenerstattung
-- Validierung: Betragsgrenzen, Kostenstelle berechtigt
-
-**Arbeitsvertrag / Gehaltsabrechnung**:
-- Zweck: Informationsextraktion (keine HCM-Aktion)
-- Nur zur Dokumentation und Datenprüfung
-
-## Verfügbare Tools
-
-### Wissensbasis
-- **kb_search**: HR-Wissensbasis durchsuchen
-- **kb_list_topics**: Alle Wissensthemen auflisten
-
-### SAP HCM
-- **hcm_get_employee**: Mitarbeiterdaten abrufen (Personalnummer erforderlich)
-- **hcm_validate_action**: HR-Aktion validieren
-- **hcm_submit_action**: HR-Aktion einreichen (NUR nach Bestätigung!)
-
-### Dokumenten-Pipeline
-- **docai_analyze_document**: Generische Erstanalyse (Phase 1 – Hypothese, kein Schema)
-- **docai_start_extraction**: Schema-gebundene Extraktion starten (Phase 2 – erst nach Bestätigung!)
-- **docai_get_extraction**: Extraktionsergebnis abrufen (Phase 3)
-- **docai_check_status**: vw-doc-ai Verfügbarkeit prüfen (allgemeiner Health Check)
-- **docai_list_document_types**: Alle Workflow-Typen mit Business-Checks auflisten
-- **docai_list_schemas**: vw-doc-ai verfügbare Schemas abrufen
-- **docai_list_extractions**: Bisherige Extraktionen auflisten
+## Verfügbare Personalprodukte
+Diese Prozesse können über Dokumenten-Upload gestartet werden:
+${productList}
 
 ## Verhaltensregeln
-1. **Erst verstehen, dann festlegen, dann extrahieren, dann validieren, dann ausführen.** Das ist die goldene Regel.
-2. **Recherchiere erst**: Nutze kb_search vor Antworten auf HR-Fragen.
-3. **Keine erfundenen Daten**: Nutze NUR echte Personalnummern aus Extraktion oder Benutzerangabe. Ratende Defaults sind verboten.
-4. **Kein Schema ohne Bestätigung**: Starte KEINE schema-gebundene Extraktion, bevor der Dokumenttyp mindestens implizit bestätigt ist.
-5. **Validierung vor Einreichung**: Immer hcm_validate_action vor hcm_submit_action.
-6. **Bestätigung einholen**: Keine Aktionen einreichen oder Dokumente genehmigen ohne explizite Bestätigung.
-7. **Unsicherheit aussprechen**: Wenn du unsicher bist, sage es und frage – statt falsch weiterzumachen.
-8. **Deutsch**: Antworte immer auf Deutsch.
-9. **Du BIST die Personalabteilung**: Verweise nicht auf andere Stellen.
-10. **Proaktiv**: Biete relevante Folgefragen oder nächste Schritte an.
-11. **Tool-Ergebnisse sind intern**: Gib NIEMALS rohe Tool-Ergebnisse, JSON-Daten, Confidence-Werte, Evidenz-Details, "needsUserInput"-Arrays oder technische Analyse-Felder an den Nutzer weiter. Formuliere stattdessen eine natürliche, gesprächsnahe Nachricht. Zum Beispiel NICHT: "Dokumenttyp-Kandidat: Fibu24-Nachweis mit Confidence 0.6, Evidenz: Dateiname enthält db" – SONDERN: "Das sieht nach einem Fahrkarten-Nachweis (Fibu24) aus. Was möchten Sie damit tun?"
-12. **Keine Aufzählung aller Dokumenttypen**: Liste NICHT alle verfügbaren Dokumenttypen auf, es sei denn der Nutzer fragt explizit danach oder der Dokumenttyp ist wirklich völlig unklar. Wenn du eine Hypothese hast, nenne nur diese und frage nach Bestätigung.
-
-## Antwortformat
-- **Conversational**: Schreibe wie ein freundlicher Personalberater, nicht wie ein technisches System.
-- Klar und knapp. Keine Bullet-Listen für interne Analyseergebnisse.
-- 40-120 Wörter.
-- Am Ende: eine klare Frage oder ein konkreter nächster Schritt.
-- KEIN Echo von Tool-Daten. Kein JSON. Keine Confidence-Zahlen.
+1. Antworte immer auf Deutsch
+2. Du BIST die Personalabteilung – verweise nicht auf andere Stellen
+3. Klar und knapp. 40-120 Wörter.
+4. Gib NIEMALS rohe JSON-Daten, Confidence-Werte oder technische Details an den Nutzer weiter
+5. Nutze kb_search vor Antworten auf HR-Fragen
 
 ## Vorschläge (PFLICHT)
-Füge am Ende JEDER Antwort einen Block mit klickbaren Antwortvorschlägen ein. Diese erscheinen als Buttons im Chat. Ohne diesen Block gibt es keine Buttons – du MUSST ihn IMMER setzen.
-Format: \`[SUGGESTIONS: Vorschlag 1 | Vorschlag 2 | Vorschlag 3]\`
-
-Regeln:
-- IMMER 2-4 Vorschläge, kurz (2-6 Wörter pro Vorschlag).
-- Die Vorschläge müssen zur aktuellen Situation passen – besonders bei Rückfragen.
-- Bei Dokumenttyp-Rückfrage mit Hypothese: z.B. "Ja, Fibu24-Erstattung | Nur Daten prüfen | Anderer Dokumenttyp"
-- Bei Ja/Nein-Fragen: "Ja, bitte starten | Nein, abbrechen"
-- Bei Bestätigungsfragen: "Bestätigen | Ändern | Abbrechen"
-- Bei offenen Fragen: die wahrscheinlichsten Antworten.
-- Bei Informationsantworten: sinnvolle Folgefragen wie "Antrag starten | Mehr erfahren | Dokument hochladen"
-- Der \`[SUGGESTIONS: ...]\` Block wird NICHT dem Nutzer angezeigt, er wird automatisch entfernt.`;
+Füge am Ende JEDER Antwort Vorschläge ein:
+\`[SUGGESTIONS: Vorschlag 1 | Vorschlag 2 | Vorschlag 3]\`
+- 2-4 Vorschläge, kurz (2-6 Wörter)
+- Passend zur aktuellen Situation`;
 }
 
 /**
  * Führt den Agent-Loop aus.
+ *
+ * Zwei Modi:
+ *   1. Workflow-Modus: Aktives Personalprodukt → Workflow-Engine (deterministisch)
+ *   2. LLM-Modus: Kein Workflow → LLM mit Tool-Calling (KB, Konversation)
  *
  * @param {object} openai - OpenAI Client-Instanz
  * @param {string} userMessage - Aktuelle User-Nachricht
  * @param {Array<{role,content}>} history - Bisheriger Chatverlauf
  * @param {object} tools - Tool-Registry aus createTools()
  * @param {string} model - LLM-Modell (Default: gpt-4o-mini)
- * @returns {{ reply: string, toolCalls: Array<{tool, args, result}> }}
+ * @param {string} [sessionId] - Session-ID für DB-basiertes State Management
+ * @returns {{ reply: string, toolCalls: Array, suggestions: string[] }}
  */
-async function runAgentLoop(openai, userMessage, history, tools, model = 'gpt-4o-mini') {
+async function runAgentLoop(openai, userMessage, history, tools, model = 'gpt-4o-mini', sessionId = null) {
 
-  const toolDefinitions = getToolDefinitions(tools);
-  const toolCallLog = [];
+  // ─── Prüfung 1: Aktiver Workflow aus DB-State? ───
+  const savedState = await stateStore.loadState(sessionId);
 
-  // Nachrichten aufbauen: System + History + aktuelle Nachricht
+  if (savedState && savedState.state !== 'done') {
+    const product = getProduct(savedState.productId);
+    if (product) {
+      console.log(`\n  🔄 Workflow FORTSETZEN: ${product.label} (State: ${savedState.state})`);
+
+      const result = await executeWorkflowTurn(product, {
+        documentId: savedState.documentId,
+        caseId: savedState.caseId,
+        userMessage,
+        tools,
+        history,
+        openai,
+        model,
+      }, savedState.state, savedState.data || {});
+
+      if (result) {
+        // State in DB persistieren
+        if (result.workflowState) {
+          await stateStore.saveState(
+            result.workflowState.caseId || savedState.caseId,
+            result.workflowState,
+            sessionId,
+          );
+        } else if (savedState.caseId) {
+          // Workflow abgebrochen (workflowState null) → State canceln
+          await stateStore.cancelState(savedState.caseId);
+        }
+        return {
+          reply: result.reply,
+          toolCalls: result.toolCalls || [],
+          suggestions: result.suggestions || [],
+        };
+      }
+      // result === null → Fallback zum LLM-Modus
+    }
+  }
+
+  // ─── Prüfung 2: Neuer Dokument-Upload? ───
+  const upload = parseUploadMessage(userMessage);
+  if (upload) {
+    // Produkt über Dateiname + Nachricht matchen
+    const match = matchProduct(upload.fileName || '', userMessage);
+
+    if (match) {
+      const product = match.product;
+      console.log(`\n  📦 NEUER Workflow: ${product.label} (Trigger: ${match.matchedTriggers.join(', ')})`);
+
+      const result = await executeWorkflowTurn(product, {
+        documentId: upload.documentId,
+        caseId: upload.caseId,
+        fileName: upload.fileName,
+        userMessage,
+        tools,
+        history,
+        openai,
+        model,
+      }, 'intake', {});
+
+      if (result) {
+        if (result.workflowState?.caseId) {
+          await stateStore.saveState(result.workflowState.caseId, result.workflowState, sessionId);
+        }
+        return {
+          reply: result.reply,
+          toolCalls: result.toolCalls || [],
+          suggestions: result.suggestions || [],
+        };
+      }
+    }
+
+    // Kein Produkt gematcht → Trotzdem analysieren, aber über Engine mit generischem Fallback
+    console.log(`\n  📦 Upload erkannt, aber kein Produkt gematcht. Analyse für Matching.`);
+
+    // Dokument generisch analysieren
+    const analyzeResult = await executeTool(tools, 'docai_analyze_document', {
+      documentId: upload.documentId,
+      userMessage,
+    });
+
+    const bestType = analyzeResult.analysis?.bestDocType;
+    if (bestType) {
+      // Versuche Produkt über den erkannten Typ zu matchen
+      const product = getProduct(bestType.documentType) ||
+        matchProduct(bestType.label || '', bestType.documentType || '')?.product;
+
+      if (product) {
+        console.log(`  🎯 LLM-Analyse hat Produkt erkannt: ${product.label}`);
+        const response = product.templates.hypothesis({ analysis: analyzeResult.analysis });
+        const wsState = {
+          productId: product.id,
+          state: 'awaiting_confirmation',
+          documentId: upload.documentId,
+          caseId: upload.caseId,
+          data: { analysis: analyzeResult.analysis },
+        };
+        if (upload.caseId) {
+          await stateStore.saveState(upload.caseId, wsState, sessionId);
+        }
+        return {
+          reply: response.text,
+          toolCalls: [{ tool: 'docai_analyze_document', args: { documentId: upload.documentId }, result: analyzeResult }],
+          suggestions: response.suggestions,
+        };
+      }
+    }
+
+    // Gar nichts erkannt → User fragen
+    const choices = getProductChoices();
+    return {
+      reply: 'Ich konnte den Dokumenttyp leider nicht eindeutig erkennen. Um welche Art von Dokument handelt es sich?',
+      toolCalls: [{ tool: 'docai_analyze_document', args: { documentId: upload.documentId }, result: analyzeResult }],
+      suggestions: [...choices.slice(0, 3), 'Anderes Dokument'],
+    };
+  }
+
+  // ─── Modus 3: LLM frei (KB, Konversation, Self-Service) ───
+  console.log(`\n  💬 LLM-Modus (kein aktiver Workflow)`);
+
+  const allToolDefinitions = getToolDefinitions(tools);
+
+  // Nur KB- und Info-Tools im LLM-Modus (keine Pipeline-Tools)
+  const llmTools = allToolDefinitions.filter(td =>
+    ['kb_search', 'kb_list_topics', 'hcm_get_employee', 'docai_list_document_types', 'docai_check_status'].includes(td.function.name)
+  );
+
   const messages = [
     { role: 'system', content: buildSystemPrompt() },
-    ...history.map(m => ({ role: m.role, content: m.content })),
+    ...expandHistoryWithToolContext(history),
     { role: 'user', content: userMessage },
   ];
 
+  const toolCallLog = [];
+
+  let supportsTemperature = true; // Wird false wenn Modell temperature:0 ablehnt
+
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    const completion = await openai.chat.completions.create({
+    const completionParams = {
       model,
       messages,
-      tools: toolDefinitions,
-      tool_choice: 'auto',
-    });
-
-    const choice = completion.choices[0];
-    const assistantMessage = choice.message;
-
-    // Nachricht dem Verlauf hinzufügen
-    messages.push(assistantMessage);
-
-    // Fall 1: LLM gibt finale Antwort (keine Tool-Calls)
-    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      const { text, suggestions } = parseSuggestions(assistantMessage.content || '');
-      return {
-        reply: text,
-        toolCalls: toolCallLog,
-        suggestions,
-      };
+    };
+    if (supportsTemperature) {
+      completionParams.temperature = 0;
+      completionParams.seed = 42;
+    }
+    if (llmTools.length > 0) {
+      completionParams.tools = llmTools;
+      completionParams.tool_choice = 'auto';
     }
 
-    // Fall 2: LLM will Tools aufrufen
+    let completion;
+    try {
+      completion = await openai.chat.completions.create(completionParams);
+    } catch (err) {
+      if (supportsTemperature && err.status === 400 && /temperature/i.test(err.message)) {
+        console.warn(`  ⚠️ Modell ${model} unterstützt temperature:0 nicht – Retry ohne`);
+        supportsTemperature = false;
+        delete completionParams.temperature;
+        delete completionParams.seed;
+        completion = await openai.chat.completions.create(completionParams);
+      } else {
+        throw err;
+      }
+    }
+    const assistantMessage = completion.choices[0].message;
+    messages.push(assistantMessage);
+
+    // Finale Antwort (keine Tool-Calls)
+    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+      const { text, suggestions } = parseSuggestions(assistantMessage.content || '');
+      return { reply: text, toolCalls: toolCallLog, suggestions };
+    }
+
+    // Tool-Calls ausführen
     for (const toolCall of assistantMessage.tool_calls) {
       const toolName = toolCall.function.name;
       let args;
-      try {
-        args = JSON.parse(toolCall.function.arguments);
-      } catch {
-        args = {};
-      }
+      try { args = JSON.parse(toolCall.function.arguments); } catch { args = {}; }
 
-      console.log(`  🔧 Agent Tool-Call: ${toolName}(${JSON.stringify(args)})`);
-
+      console.log(`  🔧 LLM Tool-Call: ${toolName}(${JSON.stringify(args)})`);
       const result = await executeTool(tools, toolName, args);
-
       toolCallLog.push({ tool: toolName, args, result });
 
-      // Tool-Ergebnis als Message zurück an den LLM
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
         content: JSON.stringify(result),
       });
     }
-
-    // Nächste Iteration: LLM verarbeitet Tool-Ergebnisse
   }
 
-  // Max Iterations erreicht – letzte Nachricht nehmen
+  // Max Iterations
   const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
-  const { text, suggestions } = parseSuggestions(lastAssistant?.content || 'Entschuldigung, ich konnte die Anfrage nicht vollständig bearbeiten. Bitte versuchen Sie es erneut.');
-  return {
-    reply: text,
-    toolCalls: toolCallLog,
-    suggestions,
-  };
+  const { text, suggestions } = parseSuggestions(lastAssistant?.content || 'Entschuldigung, ich konnte die Anfrage nicht vollständig bearbeiten.');
+  return { reply: text, toolCalls: toolCallLog, suggestions };
 }
 
 /**
- * Parst den [SUGGESTIONS: ...] Block aus der Agent-Antwort.
- * Gibt den bereinigten Text und die Suggestions als Array zurück.
+ * Parst Suggestions aus der Agent-Antwort.
+ * Erkennt mehrere Formate:
+ *   [SUGGESTIONS: A | B | C]
+ *   [A | B | C]  (ohne Prefix)
+ *   Mehrzeilige Varianten
  */
 function parseSuggestions(content) {
-  const match = content.match(/\[SUGGESTIONS:\s*([^\]]+)\]/i);
-  if (!match) return { text: content, suggestions: null };
+  if (!content) return { text: content, suggestions: null };
 
-  const suggestions = match[1]
-    .split('|')
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
+  // Variante 1: [SUGGESTIONS: A | B | C]
+  let match = content.match(/\[SUGGESTIONS:\s*(.+?)\]/is);
+  if (match) {
+    const suggestions = match[1].split('|').map(s => s.trim()).filter(s => s.length > 0);
+    const text = content.replace(/\s*\[SUGGESTIONS:\s*.+?\]/is, '').trim();
+    return { text, suggestions: suggestions.length > 0 ? suggestions : null };
+  }
 
-  const text = content.replace(/\s*\[SUGGESTIONS:[^\]]*\]/i, '').trim();
-  return { text, suggestions: suggestions.length > 0 ? suggestions : null };
+  // Variante 2: [A | B | C] am Ende der Nachricht (mind. ein | im Block)
+  match = content.match(/\s*\[([^\[\]]*\|[^\[\]]*)\]\s*$/);
+  if (match) {
+    const suggestions = match[1].split('|').map(s => s.trim()).filter(s => s.length > 0);
+    if (suggestions.length >= 2) {
+      const text = content.replace(/\s*\[[^\[\]]*\|[^\[\]]*\]\s*$/, '').trim();
+      return { text, suggestions };
+    }
+  }
+
+  return { text: content, suggestions: null };
+}
+
+/**
+ * Bereinigt Assistant-Nachrichten von internen State-Blöcken.
+ * Entfernt [TOOL_CONTEXT:...] und [WORKFLOW_STATE:...] damit das LLM sie nicht sieht.
+ */
+function expandHistoryWithToolContext(history) {
+  const expanded = [];
+  const toolContextRegex = /\[TOOL_CONTEXT:(\[.*?\])\]$/s;
+  const workflowStateRegex = /\[WORKFLOW_STATE:\{.*?\}\]$/s;
+
+  for (const m of history) {
+    if (m.role === 'assistant') {
+      let content = m.content || '';
+
+      // Workflow-State entfernen (nur intern)
+      content = content.replace(workflowStateRegex, '').trim();
+
+      // Tool-Context entfernen (nur intern)
+      const tcMatch = content.match(toolContextRegex);
+      if (tcMatch) {
+        content = content.replace(toolContextRegex, '').trim();
+      }
+
+      if (content) {
+        expanded.push({ role: 'assistant', content });
+      }
+      continue;
+    }
+    expanded.push({ role: m.role, content: m.content });
+  }
+  return expanded;
 }
 
 module.exports = { runAgentLoop, buildSystemPrompt };

@@ -97,6 +97,7 @@ module.exports = class ChatService extends cds.ApplicationService {
             history.filter(m => m.role !== 'system'),
             agentTools,
             process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            session.ID, // Session-ID für DB-basiertes State Management
           );
 
           reply = result.reply;
@@ -121,10 +122,18 @@ module.exports = class ChatService extends cds.ApplicationService {
       }
 
       // ─── Antwort speichern ───
+      // Workflow-State wird jetzt in der Cases-Tabelle persistiert (state-store.js),
+      // nicht mehr als [WORKFLOW_STATE:...] in der Chat-Nachricht.
+      let persistContent = reply;
+
+      // Tool-Context für LLM-Modus (hilft dem Agent bei Folge-Turns)
+      const toolContext = buildToolContext(result?.toolCalls);
+      if (toolContext) persistContent += `\n${toolContext}`;
+
       await INSERT.into(Messages).entries({
         session_ID: session.ID,
         role: 'assistant',
-        content: reply,
+        content: persistContent,
       });
 
       // Tool-Calls für das Frontend aufbereiten
@@ -140,6 +149,73 @@ module.exports = class ChatService extends cds.ApplicationService {
     return super.init();
   }
 };
+
+/**
+ * Baut ein kompaktes Tool-Context-Summary für die Persistierung.
+ * Wird als unsichtbarer Block an die Assistant-Nachricht angehängt,
+ * damit der Agent in Folge-Turns weiß, welche Tools bereits aufgerufen wurden.
+ */
+function buildToolContext(toolCalls) {
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  const summaries = toolCalls.map(tc => {
+    // Kompakte Zusammenfassung: nur die fachlich relevanten Keys
+    const r = tc.result || {};
+    let compact;
+    switch (tc.tool) {
+      case 'docai_analyze_document':
+        compact = {
+          documentId: tc.args?.documentId,
+          bestDocType: r.analysis?.bestDocType?.documentType,
+          confidence: r.analysis?.bestDocType?.confidence,
+          intent: r.analysis?.bestIntent?.intent,
+          needsUserInput: r.analysis?.needsUserInput,
+        };
+        break;
+      case 'docai_start_extraction':
+        compact = {
+          documentId: tc.args?.documentId,
+          documentType: tc.args?.documentType,
+          jobId: r.jobId,
+          status: r.status,
+        };
+        break;
+      case 'docai_get_extraction':
+        compact = {
+          documentId: tc.args?.documentId,
+          status: r.status,
+          fields: r.extractedFields?.map(f => `${f.fieldName}=${f.fieldValue}`) || [],
+          crossValidation: r.crossValidation,
+        };
+        break;
+      case 'hcm_get_employee':
+        compact = {
+          found: r.found,
+          personnelNumber: r.employee?.personnelNumber,
+          name: r.employee ? `${r.employee.firstName} ${r.employee.lastName}` : null,
+          employeeId: r.employee?.ID,
+        };
+        break;
+      case 'hcm_validate_action':
+        compact = { valid: r.valid, messages: r.messages };
+        break;
+      case 'hcm_submit_action':
+        compact = { actionId: r.actionId, status: r.status };
+        break;
+      case 'kb_search':
+        compact = { found: r.found, topics: r.results?.map(x => x.topic) };
+        break;
+      default:
+        // Generisch: nur Status-Keys
+        compact = Object.fromEntries(
+          Object.entries(r).filter(([k]) => ['found','status','message','error','valid'].includes(k))
+        );
+    }
+    return { tool: tc.tool, args: tc.args, result: compact };
+  });
+
+  return `[TOOL_CONTEXT:${JSON.stringify(summaries)}]`;
+}
 
 // ─── Intelligente Suggestions basierend auf Tool-Calls ──
 function deriveSuggestions(message, toolCalls) {

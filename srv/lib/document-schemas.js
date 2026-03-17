@@ -1,19 +1,16 @@
 /**
- * Document Workflow Registry
+ * Document Schema Registry – Adapter über Personalprodukt-Registry
  *
- * Zentraler Konfigurationspunkt für alle Dokumenten-Workflows.
- * Um einen neuen Personalprozess hinzuzufügen, genügt ein neuer Eintrag hier.
+ * Diese Datei ist ein ADAPTER, der die Personalprodukt-Registry (Single Source of Truth)
+ * mit einer Kompatibilitätsschicht für server.js, document-service.js und agent-tools.js verbindet.
  *
- * Jeder Workflow definiert:
- *   - triggers:            Keywords für Auto-Erkennung (Dateiname + Chat-Kontext)
- *   - vwDocAi:             Schema-Mapping für vw-doc-ai (schemaName, documentType)
- *   - schemaId:            UUID aus vw-doc-ai (null = dynamisch auflösen oder Simulation)
- *   - employeeField:       Welches extrahierte Feld den Mitarbeiter identifiziert
- *   - hcmAction:           Welche HCM-Aktion nach Freigabe ausgelöst wird
- *   - crossValidation:     Deterministische Plausibilitätsprüfung NACH Extraktion
- *   - businessContext:     Was der Agent gegen HCM prüfen soll
- *   - simulatedExtraction: Demo-Daten wenn vw-doc-ai nicht konfiguriert ist
+ * Neue Dokumenttypen werden als Personalprodukt-Datei in srv/lib/personalprodukte/ angelegt
+ * und in der Registry registriert. Nicht als Eintrag hier.
+ *
+ * Legacy-Schemas (noch nicht als Produkt migriert) bleiben hier als Fallback.
  */
+
+const registry = require('./personalprodukte/registry');
 
 // ─── Hilfsfunktionen ────────────────────────────────────
 
@@ -29,83 +26,31 @@ function parseCurrency(val) {
   return parseFloat(String(val).replace(/[^0-9.,\-]/g, '').replace(',', '.'));
 }
 
-// ─── Workflow-Registry ──────────────────────────────────
+/**
+ * Konvertiert ein Personalprodukt in das Schema-Format,
+ * das server.js und agent-tools.js erwarten.
+ */
+function productToSchema(product) {
+  return {
+    label: product.label,
+    triggers: product.triggers,
+    vwDocAi: {
+      schemaName: product.docai?.schemaName,
+      documentType: product.docai?.documentType || 'custom',
+    },
+    schemaId: product.docai?.schemaId || null,
+    documentType: product.id,
+    employeeField: product.employee?.lookupField,
+    hcmAction: product.hcmAction,
+    crossValidation: product.validation,
+    businessContext: product.businessChecks || [],
+    simulatedExtraction: product.simulatedExtraction,
+  };
+}
+
+// ─── Legacy-Schemas (noch nicht als Produkt migriert) ───
 
 const DOCUMENT_WORKFLOWS = {
-
-  // ═══════════════════════════════════════════════════════
-  // Fibu24-Nachweis (Fahrkarte / ÖPNV-Abo)
-  // ═══════════════════════════════════════════════════════
-  'Fibu24-Nachweis': {
-    label: 'Fibu24-Nachweis (Fahrkarte / ÖPNV-Abo)',
-
-    triggers: [
-      'fibu24', 'fahrkarte', 'monatsabo', 'abo-nachweis', 'jobticket',
-      'deutschlandticket', 'abo', 'öpnv', 'pendlernachweis', 'monatsticket',
-      'nahverkehr', 'bahncard', 'ticket', 'monatskarte', 'zeitkarte',
-      'db', 'bahn',
-    ],
-
-    vwDocAi: {
-      schemaName: 'Fibu24_Schema',
-      documentType: 'custom',
-    },
-
-    schemaId: '60ae4d9b-ea85-4490-be80-0478700cd254',
-    documentType: 'fibu24_nachweis',
-    employeeField: 'Vorname',
-    hcmAction: 'fibu24_erstattung',
-
-    crossValidation: (fields) => {
-      const issues = [];
-      const valid = [];
-      const map = toFieldMap(fields);
-
-      // Real vw-doc-ai fields: Vorname, Nachname, Gültig ab Datum, Gültig bis Datum
-      const von = map['Gültig ab Datum'];
-      const bis = map['Gültig bis Datum'];
-      if (von && bis) {
-        const vonDate = new Date(von);
-        const bisDate = new Date(bis);
-        if (!isNaN(vonDate.getTime()) && !isNaN(bisDate.getTime())) {
-          if (vonDate > bisDate) {
-            issues.push('Gültigkeit-Von liegt nach Gültigkeit-Bis');
-          } else {
-            const days = Math.round((bisDate - vonDate) / (1000 * 60 * 60 * 24));
-            valid.push(`Gültigkeitszeitraum: ${days} Tage`);
-            if (days > 366) issues.push('Gültigkeitszeitraum über 1 Jahr – ungewöhnlich');
-          }
-        }
-      }
-
-      if (map.Vorname && map.Nachname) {
-        valid.push(`Inhaber: ${map.Vorname} ${map.Nachname}`);
-      } else if (!map.Vorname && !map.Nachname) {
-        issues.push('Kein Name des Inhabers extrahiert');
-      }
-
-      return { issues, valid };
-    },
-
-    businessContext: [
-      'Name auf Fahrkarte stimmt mit Mitarbeiter überein (Personalnummer prüfen)',
-      'Fibu24-Erstattungsanspruch besteht (Mitarbeiter in berechtigter Mitarbeitergruppe)',
-      'Strecke entspricht dem Arbeitsweg (Wohnadresse ↔ Arbeitsort)',
-      'Betrag innerhalb der monatlichen Erstattungsgrenzen',
-      'Zeitraum fällt in den aktuellen Abrechnungsmonat',
-      'Kein doppelter Nachweis für denselben Zeitraum eingereicht',
-    ],
-
-    simulatedExtraction: {
-      headerFields: [
-        { name: 'Vorname',           label: 'Vorname',    value: 'Andrea',       rawValue: 'Andrea',       type: 'string', confidence: 0.94, page: 1 },
-        { name: 'Nachname',          label: 'Nachname',   value: 'Kirchhoff',    rawValue: 'Kirchhoff',    type: 'string', confidence: 0.93, page: 1 },
-        { name: 'Gültig ab Datum',   label: 'Gültig ab',  value: '2023-01-01',   rawValue: '01.01.23',     type: 'date',   confidence: 0.96, page: 1 },
-        { name: 'Gültig bis Datum',  label: 'Gültig bis', value: '2023-12-31',   rawValue: '31.12.23',     type: 'date',   confidence: 0.95, page: 1 },
-      ],
-      lineItems: [],
-    },
-  },
 
   // ═══════════════════════════════════════════════════════
   // Elternzeit-Antrag
@@ -425,30 +370,63 @@ const DOCUMENT_WORKFLOWS = {
 
 /**
  * Gibt die Workflow-Config für einen Dokumenttyp zurück.
- * Akzeptiert sowohl den Registry-Key (z.B. 'Fibu24-Nachweis') als auch
- * den internen documentType (z.B. 'fibu24_nachweis').
+ *
+ * Prüfreihenfolge:
+ *   1. Personalprodukt-Registry (Single Source of Truth)
+ *   2. Legacy-DOCUMENT_WORKFLOWS (Fallback für nicht-migrierte Typen)
  */
 function getSchema(documentType) {
-  if (DOCUMENT_WORKFLOWS[documentType]) return DOCUMENT_WORKFLOWS[documentType];
+  // 1. Produkt-Registry (by ID, then by label)
+  const product = registry.getProduct(documentType) ||
+    registry.findProductByLabel(documentType);
+  if (product) return productToSchema(product);
 
+  // 2. Legacy-Workflows (by key, then by documentType field)
+  if (DOCUMENT_WORKFLOWS[documentType]) return DOCUMENT_WORKFLOWS[documentType];
   for (const wf of Object.values(DOCUMENT_WORKFLOWS)) {
     if (wf.documentType === documentType) return wf;
   }
   return null;
 }
 
-/** Listet alle registrierten Workflows mit Metadaten */
+/** Listet alle registrierten Workflows mit Metadaten (Produkte + Legacy) */
 function listSchemas() {
-  return Object.entries(DOCUMENT_WORKFLOWS).map(([key, wf]) => ({
-    documentType: key,
-    label: wf.label,
-    schemaId: wf.schemaId,
-    vwDocAiSchemaName: wf.vwDocAi.schemaName,
-    configured: !!wf.schemaId,
-    employeeField: wf.employeeField,
-    hcmAction: wf.hcmAction,
-    triggers: wf.triggers,
-  }));
+  const schemas = [];
+  const seen = new Set();
+
+  // 1. Produkte aus der Registry (bevorzugt)
+  for (const info of registry.listProducts()) {
+    const product = registry.getProduct(info.id);
+    if (!product) continue;
+    seen.add(product.id);
+    schemas.push({
+      documentType: product.label,
+      label: product.label,
+      schemaId: product.docai?.schemaId || null,
+      vwDocAiSchemaName: product.docai?.schemaName,
+      configured: !!product.docai?.schemaId,
+      employeeField: product.employee?.lookupField,
+      hcmAction: product.hcmAction,
+      triggers: product.triggers,
+    });
+  }
+
+  // 2. Legacy-Workflows (die noch nicht als Produkt existieren)
+  for (const [key, wf] of Object.entries(DOCUMENT_WORKFLOWS)) {
+    if (seen.has(wf.documentType)) continue;
+    schemas.push({
+      documentType: key,
+      label: wf.label,
+      schemaId: wf.schemaId,
+      vwDocAiSchemaName: wf.vwDocAi.schemaName,
+      configured: !!wf.schemaId,
+      employeeField: wf.employeeField,
+      hcmAction: wf.hcmAction,
+      triggers: wf.triggers,
+    });
+  }
+
+  return schemas;
 }
 
 /**
@@ -505,11 +483,16 @@ function getSimulatedExtraction(documentType) {
 
 /**
  * Erkennt den Dokumenttyp aus Dateiname ODER Chat-Kontext.
- * Prüft alle Workflows gegen ihre Trigger-Keywords.
+ * Prüft zuerst die Produkt-Registry, dann Legacy-Workflows.
  */
 function inferDocumentType(input) {
   const lower = (input || '').toLowerCase();
 
+  // 1. Produkt-Registry
+  const match = registry.matchProduct(input, input);
+  if (match) return match.product.label;
+
+  // 2. Legacy-Workflows
   for (const [key, wf] of Object.entries(DOCUMENT_WORKFLOWS)) {
     if (wf.triggers.some(t => lower.includes(t))) {
       return key;
@@ -521,6 +504,7 @@ function inferDocumentType(input) {
 
 /**
  * Löst den vw-doc-ai-Kontext für einen Upload auf.
+ * Prüft zuerst die Produkt-Registry.
  */
 function resolveUploadConfig(documentType) {
   const wf = getSchema(documentType);
@@ -529,9 +513,9 @@ function resolveUploadConfig(documentType) {
   }
 
   return {
-    documentType: wf.vwDocAi.documentType,
-    schemaId: wf.schemaId,
-    schemaName: wf.vwDocAi.schemaName,
+    documentType: wf.vwDocAi?.documentType || 'custom',
+    schemaId: wf.schemaId || wf.vwDocAi?.schemaId || null,
+    schemaName: wf.vwDocAi?.schemaName || null,
   };
 }
 

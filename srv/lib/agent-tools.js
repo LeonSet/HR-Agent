@@ -11,8 +11,19 @@ const { searchKnowledge, listTopics } = require('./knowledge-base');
 const vwDocAi = require('./vw-doc-ai-client');
 const { runCrossValidation, listSchemas, getSchema, getWorkflowSummary, resolveUploadConfig, getSimulatedExtraction } = require('./document-schemas');
 const cds = require('@sap/cds');
-let pdfParse;
-try { pdfParse = require('pdf-parse'); } catch { pdfParse = null; }
+
+/**
+ * Lazy-Load pdf-parse: wird bei jedem Aufruf frisch versucht,
+ * nicht einmal bei Module-Init (wo Fehler still verschluckt werden).
+ */
+function getPdfParser() {
+  try {
+    return require('pdf-parse');
+  } catch (e) {
+    console.error(`❌ pdf-parse konnte nicht geladen werden: ${e.message}`);
+    return null;
+  }
+}
 
 /**
  * Erstellt die Tool-Definitionen und Executors.
@@ -299,31 +310,60 @@ function createTools(db, openaiClient) {
           `- ${t.documentType}: ${t.label} (Schlüsselwörter: ${t.triggers.slice(0, 6).join(', ')})`
         ).join('\n');
 
-        // ─── Dokument-Inhalt für LLM aufbereiten ───
+        // ─── 1. Buffer prüfen (NICHT still übergehen) ───
         const fileBuffer = global._pendingBuffers?.[documentId];
         const mimeType = (doc.mimeType || '').toLowerCase();
+        const warnings = [];
+
+        if (!fileBuffer) {
+          console.error(`  ❌ KEIN Buffer für Dokument ${documentId} (${doc.fileName}) – Server-Restart oder bereits verarbeitet?`);
+          warnings.push('Dokument-Buffer nicht verfügbar (möglicherweise bereits verarbeitet)');
+        } else {
+          console.log(`  📋 Buffer vorhanden: ${Math.round(fileBuffer.length / 1024)}KB, MIME: ${mimeType}`);
+        }
+
+        // ─── 2. Dokument-Inhalt für LLM aufbereiten ───
         let contentParts = [];
         let extractedText = null;
-
-        console.log(`  📋 Buffer vorhanden: ${!!fileBuffer}${fileBuffer ? ` (${Math.round(fileBuffer.length / 1024)}KB)` : ''}, MIME: ${mimeType}`);
+        let contentSource = 'none';
 
         if (fileBuffer) {
-          if (mimeType.includes('pdf') && pdfParse) {
-            // PDF → Text extrahieren
-            try {
-              const parsed = await pdfParse(fileBuffer);
-              extractedText = (parsed.text || '').trim().substring(0, 3000);
-              console.log(`  📄 PDF-Text extrahiert: ${extractedText.length} Zeichen`);
-              // Wenn kein Text (gescanntes PDF) → als Bild versuchen
-              if (extractedText.length < 20) {
-                console.log('  📄 PDF enthält kaum Text (vermutlich gescannt) – nur Metadaten verfügbar');
-                extractedText = null;
+          if (mimeType.includes('pdf')) {
+            // Versuch 1: PDF-Text extrahieren
+            const pdfParse = getPdfParser();
+            if (pdfParse) {
+              try {
+                const parsed = await pdfParse(fileBuffer);
+                extractedText = (parsed.text || '').trim().substring(0, 3000);
+                if (extractedText.length >= 20) {
+                  console.log(`  📄 PDF-Text extrahiert: ${extractedText.length} Zeichen`);
+                  contentSource = 'pdf-text';
+                } else {
+                  console.log(`  📄 PDF enthält kaum Text (${extractedText.length} Zeichen), versuche Vision-Fallback`);
+                  extractedText = null;
+                }
+              } catch (e) {
+                console.warn(`  ⚠️ PDF-Text-Extraktion fehlgeschlagen: ${e.message}, versuche Vision-Fallback`);
+                warnings.push(`PDF-Text-Extraktion fehlgeschlagen: ${e.message}`);
               }
-            } catch (e) {
-              console.warn('  ⚠️ PDF-Parsing fehlgeschlagen:', e.message);
+            } else {
+              warnings.push('pdf-parse Bibliothek nicht verfügbar');
+            }
+
+            // Versuch 2: PDF als File-Content an die API (Fallback)
+            if (!extractedText && fileBuffer.length < 5 * 1024 * 1024) {
+              const base64 = fileBuffer.toString('base64');
+              contentParts.push({
+                type: 'file',
+                file: {
+                  filename: doc.fileName || 'document.pdf',
+                  file_data: `data:application/pdf;base64,${base64}`,
+                },
+              });
+              console.log(`  📎 PDF als File-Content für API vorbereitet (${Math.round(fileBuffer.length / 1024)}KB)`);
+              contentSource = 'pdf-file';
             }
           } else if (mimeType.match(/image\/(png|jpe?g|tiff|webp)/)) {
-            // Bild → Base64 für Vision-API
             const base64 = fileBuffer.toString('base64');
             const mediaType = mimeType.includes('png') ? 'image/png' : mimeType.includes('tiff') ? 'image/tiff' : 'image/jpeg';
             contentParts.push({
@@ -331,10 +371,14 @@ function createTools(db, openaiClient) {
               image_url: { url: `data:${mediaType};base64,${base64}`, detail: 'low' },
             });
             console.log(`  🖼️ Bild für Vision-API vorbereitet (${Math.round(fileBuffer.length / 1024)}KB)`);
+            contentSource = 'image-vision';
+          } else {
+            console.warn(`  ⚠️ Unbekannter MIME-Typ: ${mimeType}`);
+            warnings.push(`MIME-Typ ${mimeType} wird nicht unterstützt`);
           }
         }
 
-        // ─── LLM-Klassifikation ───
+        // ─── 3. LLM-Klassifikation (IMMER versuchen, auch nur mit Dateiname) ───
         const hasContent = extractedText || contentParts.length > 0;
         const classificationPrompt =
           `Du bist ein Dokumenten-Klassifizierer für ein HR-System bei NOVENTIS (Volkswagen-Konzern).\n` +
@@ -346,6 +390,7 @@ function createTools(db, openaiClient) {
           `\nWICHTIG:\n` +
           `- Nutze ALLE verfügbaren Signale: Dateiname, Schlüsselwörter, Nutzer-Nachricht${hasContent ? ', Dokumentinhalt' : ''}.\n` +
           `- "DB" im Dateinamen kann für "Deutsche Bahn" stehen → Fahrkarte / ÖPNV → Fibu24-Nachweis.\n` +
+          `- "Nachweis" kann ein Fibu24-Nachweis (Fahrkarte), Arbeitgeberbescheinigung oder anderer Beleg sein.\n` +
           `- Triff deine BESTE Vermutung. Setze confidence entsprechend deiner Sicherheit (0.3 = schwache Vermutung, 0.7+ = sicher).\n` +
           `- Antworte "unbekannt" NUR wenn wirklich GAR KEIN Signal auf einen Typ hindeutet.\n` +
           `\nAntwort-Format (NUR dieses JSON, kein anderer Text):\n` +
@@ -358,42 +403,79 @@ function createTools(db, openaiClient) {
           `  "intent": "<vermuteter Nutzer-Intent: antrag_einreichen|dokument_pruefen|daten_extrahieren|unklar>"\n` +
           `}`;
 
-        console.log(`  📨 LLM-Prompt: ${hasContent ? 'mit Dokumentinhalt' : 'nur Dateiname+Kontext'}`);
-
+        console.log(`  📨 LLM-Klassifikation: Quelle=${contentSource}, hasContent=${hasContent}`);
 
         let llmResult = null;
+        let llmError = null;
         if (openaiClient) {
+          const llmMessages = [{
+            role: 'user',
+            content: contentParts.length > 0
+              ? [{ type: 'text', text: classificationPrompt }, ...contentParts]
+              : classificationPrompt,
+          }];
+
+          const llmParams = {
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            messages: llmMessages,
+          };
+
           try {
-            const messages = [{
-              role: 'user',
-              content: contentParts.length > 0
-                ? [{ type: 'text', text: classificationPrompt }, ...contentParts]
-                : classificationPrompt,
-            }];
-
-            const completion = await openaiClient.chat.completions.create({
-              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-              messages,
-              temperature: 0.1,
-              max_tokens: 500,
-              response_format: { type: 'json_object' },
-            });
-
-            const raw = completion.choices[0]?.message?.content;
+            const completion = await openaiClient.chat.completions.create(llmParams);
+            const raw = (completion.choices[0]?.message?.content || '').trim();
             if (raw) {
-              llmResult = JSON.parse(raw);
-              console.log(`  🧠 LLM-Klassifikation: ${llmResult.documentType} (${Math.round((llmResult.confidence || 0) * 100)}%)`);
+              // JSON aus der Antwort extrahieren (Reasoning-Modelle geben manchmal extra Text zurück)
+              const jsonMatch = raw.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                llmResult = JSON.parse(jsonMatch[0]);
+                console.log(`  🧠 LLM-Klassifikation: ${llmResult.documentType} (${Math.round((llmResult.confidence || 0) * 100)}%)`);
+              } else {
+                console.warn(`  ⚠️ LLM-Antwort enthält kein JSON: ${raw.substring(0, 100)}`);
+              }
+            } else {
+              console.warn(`  ⚠️ LLM-Antwort ist leer`);
             }
           } catch (e) {
-            console.warn('  ⚠️ LLM-Klassifikation fehlgeschlagen:', e.message);
+            // Wenn contentParts den Fehler verursachen (MIME, file-type nicht unterstützt),
+            // Retry NUR mit Text-Prompt (Dateiname + User-Nachricht)
+            if (contentParts.length > 0 && e.status === 400) {
+              console.warn(`  ⚠️ LLM mit Dokumentinhalt fehlgeschlagen (${e.message}), Retry nur mit Dateiname`);
+              warnings.push(`Dokumentinhalt konnte nicht an LLM gesendet werden: ${e.message}`);
+              contentSource = 'filename-only';
+              try {
+                const fallbackMessages = [{ role: 'user', content: classificationPrompt }];
+                const fallbackCompletion = await openaiClient.chat.completions.create({
+                  ...llmParams,
+                  messages: fallbackMessages,
+                });
+                const fallbackRaw = (fallbackCompletion.choices[0]?.message?.content || '').trim();
+                if (fallbackRaw) {
+                  const jsonMatch = fallbackRaw.match(/\{[\s\S]*\}/);
+                  if (jsonMatch) {
+                    llmResult = JSON.parse(jsonMatch[0]);
+                    console.log(`  🧠 LLM-Klassifikation (Fallback): ${llmResult.documentType} (${Math.round((llmResult.confidence || 0) * 100)}%)`);
+                  }
+                }
+              } catch (e2) {
+                llmError = e2.message;
+                console.error(`  ❌ LLM-Klassifikation auch ohne Inhalt FEHLGESCHLAGEN: ${e2.message}`);
+                warnings.push(`LLM-Analyse fehlgeschlagen: ${e2.message}`);
+              }
+            } else {
+              llmError = e.message;
+              console.error(`  ❌ LLM-Klassifikation FEHLGESCHLAGEN: ${e.message}`);
+              warnings.push(`LLM-Analyse fehlgeschlagen: ${e.message}`);
+            }
           }
+        } else {
+          console.error('  ❌ OpenAI Client nicht verfügbar!');
+          warnings.push('OpenAI Client nicht initialisiert');
         }
 
-        // ─── Ergebnis zusammenbauen ───
+        // ─── 4. Ergebnis zusammenbauen (mit Transparenz) ───
         let bestDocType, bestIntent, summary, detectedFields;
 
         if (llmResult && llmResult.documentType && llmResult.documentType !== 'unbekannt') {
-          // LLM hat ein Ergebnis → verwenden
           const matchedWorkflow = availableTypes.find(t =>
             t.documentType === llmResult.documentType ||
             t.label.toLowerCase().includes(llmResult.documentType.toLowerCase())
@@ -402,7 +484,7 @@ function createTools(db, openaiClient) {
             documentType: matchedWorkflow?.documentType || llmResult.documentType,
             label: matchedWorkflow?.label || llmResult.label || llmResult.documentType,
             confidence: Math.min(llmResult.confidence || 0.5, 0.95),
-            evidence: `KI-Analyse: ${llmResult.summary || 'Dokument erkannt'}`,
+            evidence: `KI-Analyse (${contentSource}): ${llmResult.summary || 'Dokument erkannt'}`,
           };
           bestIntent = llmResult.intent && llmResult.intent !== 'unklar'
             ? { intent: llmResult.intent, confidence: 0.6, evidence: 'Aus Dokumentinhalt abgeleitet' }
@@ -410,7 +492,7 @@ function createTools(db, openaiClient) {
           summary = llmResult.summary;
           detectedFields = llmResult.detectedFields || [];
         } else {
-          // Kein LLM-Ergebnis → minimaler Dateiname-Fallback
+          // Dateiname-Fallback
           const fileNameLower = (doc.fileName || '').toLowerCase();
           for (const wf of availableTypes) {
             const schema = getSchema(wf.documentType);
@@ -437,7 +519,9 @@ function createTools(db, openaiClient) {
           summary,
           detectedFields,
           needsUserInput,
-          source: llmResult ? 'llm-vision' : 'filename-heuristic',
+          source: llmResult ? `llm-${contentSource}` : 'filename-heuristic',
+          contentSource,
+          warnings: warnings.length > 0 ? warnings : undefined,
         };
 
         // In DB + Audit speichern
@@ -459,7 +543,7 @@ function createTools(db, openaiClient) {
           });
         }
 
-        // Kompakte Empfehlung für den Agent
+        // Empfehlung für den Agent
         let recommendation;
         if (bestDocType && bestDocType.confidence >= 0.7) {
           recommendation = `Dokumenttyp "${bestDocType.label}" erkannt (${Math.round(bestDocType.confidence * 100)}%). ${summary || ''}`;
@@ -467,6 +551,9 @@ function createTools(db, openaiClient) {
           recommendation = `Vermutlich "${bestDocType.label}" (${Math.round(bestDocType.confidence * 100)}%). Bestätigung empfohlen.`;
         } else {
           recommendation = `Dokumenttyp konnte nicht ermittelt werden. Bitte den Nutzer fragen.`;
+          if (warnings.length > 0) {
+            recommendation += ` Warnungen: ${warnings.join('; ')}`;
+          }
         }
 
         return { analysis, recommendation };
@@ -646,24 +733,65 @@ function createTools(db, openaiClient) {
         const isRealJob = doc.jobId && !doc.jobId.startsWith('sim-');
         if (vwDocAi.isConfigured() && isRealJob) {
           try {
-            const job = await vwDocAi.getJobStatus(doc.jobId);
-            if (job.status === 'DONE' && job.extraction) {
-              const fields = job.extraction.headerFields || [];
-              const crossValidation = runCrossValidation(doc.documentType, fields);
-              return {
-                found: true,
-                source: 'vw-doc-ai',
-                document: { id: doc.ID, fileName: doc.fileName, documentType: doc.documentType, status: job.status },
-                extraction: { headerFields: fields, lineItems: job.extraction.lineItems || [] },
-                crossValidation,
-                workflow: workflow ? {
-                  employeeField: workflow.employeeField,
-                  hcmAction: workflow.hcmAction,
-                  businessChecks: workflow.businessContext,
-                } : null,
-              };
+            // Eingebautes Polling: bis zu 4 Versuche mit steigenden Wartezeiten
+            const pollDelays = [0, 4000, 5000, 6000];
+            for (let attempt = 0; attempt < pollDelays.length; attempt++) {
+              if (pollDelays[attempt] > 0) {
+                console.log(`  ⏳ Warte ${pollDelays[attempt]/1000}s auf Extraktion (Versuch ${attempt + 1}/${pollDelays.length})...`);
+                await new Promise(resolve => setTimeout(resolve, pollDelays[attempt]));
+              }
+
+              const job = await vwDocAi.getJobStatus(doc.jobId);
+
+              if (job.status === 'DONE' && job.extraction) {
+                const fields = job.extraction.headerFields || [];
+
+                // Felder in lokale DB speichern für spätere Zugriffe
+                const { ExtractedFields: EF } = cds.entities('hr.agent');
+                const existingFields = await SELECT.from(EF).where({ document_ID: documentId });
+                if (existingFields.length === 0 && fields.length > 0) {
+                  for (const field of fields) {
+                    await INSERT.into(EF).entries({
+                      document_ID: documentId,
+                      fieldName: field.name,
+                      fieldValue: field.value,
+                      confidence: field.confidence || 0.9,
+                      rawValue: field.rawValue || field.value,
+                      page: field.page || 1,
+                    });
+                  }
+                  await UPDATE(Documents, documentId).set({ status: 'done', phase: 'extracted' });
+                }
+
+                const crossValidation = runCrossValidation(doc.documentType, fields);
+                return {
+                  found: true,
+                  source: 'vw-doc-ai',
+                  status: 'done',
+                  documentType: doc.documentType,
+                  document: { id: doc.ID, fileName: doc.fileName, documentType: doc.documentType, status: 'done' },
+                  extractedFields: fields.map(f => ({
+                    fieldName: f.name, fieldValue: f.value,
+                    confidence: f.confidence, rawValue: f.rawValue, page: f.page,
+                  })),
+                  crossValidation,
+                  workflowContext: workflow ? {
+                    employeeField: workflow.employeeField,
+                    hcmAction: workflow.hcmAction,
+                    businessChecks: workflow.businessContext,
+                  } : null,
+                };
+              }
+
+              if (job.status === 'FAILED') {
+                return { found: true, status: 'failed', message: `Extraktion fehlgeschlagen: ${job.error || 'Unbekannter Fehler'}` };
+              }
+
+              // Noch PENDING/PROCESSING → weiter pollen
             }
-            return { found: true, status: job.status, message: `Extraktion noch nicht abgeschlossen (Status: ${job.status})` };
+
+            // Nach allen Versuchen immer noch nicht DONE
+            return { found: true, status: 'processing', message: 'Extraktion läuft noch. Bitte in einigen Sekunden erneut versuchen.' };
           } catch (err) {
             console.warn(`⚠️ vw-doc-ai getJobStatus fehlgeschlagen, Fallback auf lokale DB: ${err.message}`);
             // Fallthrough zur lokalen DB
@@ -677,16 +805,15 @@ function createTools(db, openaiClient) {
         return {
           found: true,
           source: 'simulation',
+          status: doc.status || 'done',
+          documentType: doc.documentType,
           document: { id: doc.ID, fileName: doc.fileName, documentType: doc.documentType, status: doc.status },
-          extraction: {
-            headerFields: fields.map(f => ({
-              name: f.fieldName, label: f.fieldName, value: f.fieldValue,
-              rawValue: f.rawValue, confidence: f.confidence, page: f.page,
-            })),
-            lineItems: [],
-          },
+          extractedFields: fields.map(f => ({
+            fieldName: f.fieldName, fieldValue: f.fieldValue,
+            confidence: f.confidence, rawValue: f.rawValue, page: f.page,
+          })),
           crossValidation,
-          workflow: workflow ? {
+          workflowContext: workflow ? {
             employeeField: workflow.employeeField,
             hcmAction: workflow.hcmAction,
             businessChecks: workflow.businessContext,
