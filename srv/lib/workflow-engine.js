@@ -65,16 +65,20 @@ async function classifyIntent(msg, openai, model) {
           { role: 'system', content: INTENT_SYSTEM_PROMPT },
           { role: 'user', content: msg },
         ],
-        max_completion_tokens: 50,
+        max_completion_tokens: 100,
       });
 
       const raw = (completion.choices[0]?.message?.content || '').trim().toLowerCase();
-      const intent = VALID_INTENTS.find(i => raw.includes(i));
-      if (intent) {
-        console.log(`  🤖 LLM-Intent: ${intent} (raw: "${raw}")`);
-        return intent;
+      if (!raw) {
+        console.log(`  ℹ️ LLM-Intent: leere Antwort → Regex-Fallback`);
+      } else {
+        const intent = VALID_INTENTS.find(i => raw.includes(i));
+        if (intent) {
+          console.log(`  🤖 LLM-Intent: ${intent} (raw: "${raw}")`);
+          return intent;
+        }
+        console.warn(`  ⚠️ LLM-Intent nicht erkannt: "${raw}" → Regex-Fallback`);
       }
-      console.warn(`  ⚠️ LLM-Intent nicht erkannt: "${raw}" → Regex-Fallback`);
     } catch (err) {
       console.warn(`  ⚠️ LLM-Intent-Fehler: ${err.message} → Regex-Fallback`);
     }
@@ -343,10 +347,38 @@ async function executeWorkflowTurn(product, ctx, currentState, stateData) {
         toolCalls.push({ tool: 'hcm_get_employee', args: { personnelNumber: pnrMatch[0] }, result: empResult });
 
         if (empResult.found) {
+          // Name-Cross-Check: Stimmt der gefundene Mitarbeiter mit dem Dokument überein?
+          const fields = data.extraction?.extractedFields || [];
+          const docLastName = fields.find(f => /nachname/i.test(f.fieldName || f.name));
+          const docFirstName = fields.find(f => /vorname/i.test(f.fieldName || f.name));
+          const empName = empResult.employee;
+
+          const lastNameMismatch = docLastName &&
+            (docLastName.fieldValue || docLastName.value).toLowerCase() !== empName.lastName.toLowerCase();
+          const firstNameMismatch = docFirstName &&
+            (docFirstName.fieldValue || docFirstName.value).toLowerCase() !== empName.firstName.toLowerCase();
+
+          if (lastNameMismatch || firstNameMismatch) {
+            const docName = [docFirstName?.fieldValue || docFirstName?.value, docLastName?.fieldValue || docLastName?.value].filter(Boolean).join(' ');
+            return {
+              reply: `Der Mitarbeiter mit Personalnummer **${empName.personnelNumber}** ist **${empName.firstName} ${empName.lastName}**, ` +
+                `aber im Dokument steht **${docName}**. Das stimmt nicht überein.\n\n` +
+                `Bitte geben Sie die korrekte Personalnummer des Dokumentinhabers an.`,
+              suggestions: ['Andere Personalnummer', 'Abbrechen'],
+              toolCalls,
+              workflowState: {
+                productId: product.id,
+                state: 'awaiting_employee',
+                documentId: ctx.documentId,
+                caseId: ctx.caseId,
+                data,
+              },
+            };
+          }
+
           data.employee = empResult.employee;
 
           // Cross-Validierung
-          const fields = data.extraction?.extractedFields || [];
           data.validationResult = product.validation(fields);
 
           const response = product.templates.extractionSummary(data);

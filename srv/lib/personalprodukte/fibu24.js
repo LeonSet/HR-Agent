@@ -23,7 +23,7 @@ module.exports = {
     'fibu24', 'fahrkarte', 'monatsabo', 'abo-nachweis', 'jobticket',
     'deutschlandticket', 'abo', 'öpnv', 'pendlernachweis', 'monatsticket',
     'nahverkehr', 'bahncard', 'ticket', 'monatskarte', 'zeitkarte',
-    'db', 'bahn',
+    'db-ticket', 'db-fahrkarte', 'deutsche bahn', 'bahn',
   ],
 
   // ─── vw-doc-ai Konfiguration ──────────────────────────
