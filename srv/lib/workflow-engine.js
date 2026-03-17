@@ -338,6 +338,17 @@ async function executeWorkflowTurn(product, ctx, currentState, stateData) {
     // User liefert Personalnummer nach
     // ═══════════════════════════════════════════════════
     case 'awaiting_employee': {
+      // Erst Intent prüfen (Abbruch, Korrektur etc.)
+      const empIntent = await classifyIntent(ctx.userMessage, ctx.openai, ctx.model);
+      if (empIntent === 'deny') {
+        return {
+          reply: 'Verstanden, der Vorgang wird abgebrochen.',
+          suggestions: ['Neues Dokument hochladen', 'Frage stellen'],
+          toolCalls: [],
+          workflowState: { productId: product.id, state: 'cancelled', documentId: ctx.documentId, caseId: ctx.caseId, data },
+        };
+      }
+
       // Versuche Personalnummer aus User-Nachricht zu extrahieren
       const pnrMatch = ctx.userMessage.match(/\d{6,8}/);
       if (pnrMatch) {
