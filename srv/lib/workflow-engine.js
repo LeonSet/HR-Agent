@@ -534,6 +534,11 @@ async function lookupAndValidate(product, ctx, data, fields, toolCalls) {
       searchParams.personnelNumber = lookupValue.fieldValue || lookupValue.value;
     } else {
       searchParams.lastName = lookupValue.fieldValue || lookupValue.value;
+      // Vorname mitschicken, wenn extrahiert (verhindert falsche Treffer bei gleichem Nachnamen)
+      const firstNameField = fields.find(f => /vorname/i.test(f.fieldName || f.name));
+      if (firstNameField) {
+        searchParams.firstName = firstNameField.fieldValue || firstNameField.value;
+      }
     }
 
     const empResult = await executeTool(ctx.tools, 'hcm_get_employee', searchParams);
