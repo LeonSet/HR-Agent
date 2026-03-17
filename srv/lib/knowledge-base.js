@@ -14,7 +14,7 @@ const knowledgeChunks = [
     content: `## Elternzeit – Grundlagen
 - **Gesetzliche Grundlage:** BEEG §16: Bis zu 3 Jahre pro Kind.
 - Aufteilung und gleichzeitige Inanspruchnahme beider Elternteile möglich.
-- NOVENTIS-Betriebsvereinbarung "Elternzeit": Zusätzliche FAQs, Musterformulare und Beratung über das HR-Portal.
+- VOLKSWAGEN-Betriebsvereinbarung "Elternzeit": Zusätzliche FAQs, Musterformulare und Beratung über das HR-Portal.
 - Betriebsratsbeteiligung: Information und Stellungnahme durch den örtlichen Betriebsrat.`,
   },
   {
@@ -32,7 +32,7 @@ const knowledgeChunks = [
     keywords: ['elternzeit', 'elterngeld', 'gehalt', 'netto', 'zuschuss', 'geld'],
     content: `## Elternzeit – Gehalts- und Sozialversicherungswirkung
 - Elterngeld ersetzt ca. 65% des letzten Netto-Einkommens (max. 1.800€).
-- NOVENTIS-Elternzeitbeihilfe: Zuschuss auf Elterngeld ("Top-Up") für Tarifbeschäftigte bis zu 10% des letzten Nettogehalts (gem. Betriebsvereinbarung).
+- VOLKSWAGEN-Elternzeitbeihilfe: Zuschuss auf Elterngeld ("Top-Up") für Tarifbeschäftigte bis zu 10% des letzten Nettogehalts (gem. Betriebsvereinbarung).
 - Rückkehr: Wiederbesetzung der bisherigen Tätigkeit oder gleichwertige Position.`,
   },
   {
@@ -41,7 +41,7 @@ const knowledgeChunks = [
     keywords: ['teilzeit', 'reduzierung', 'stunden', 'arbeitszeit', 'tzbfg', 'wochenstunden'],
     content: `## Teilzeit – Grundlagen
 - **Gesetzlicher Anspruch:** §§8ff. TzBfG: Anspruch bei ≥6 Monaten Betriebszugehörigkeit.
-- NOVENTIS-Tarifvertrag: Entgeltgruppen, Staffelung nach Arbeitszeit.
+- VOLKSWAGEN-Tarifvertrag: Entgeltgruppen, Staffelung nach Arbeitszeit.
 - Betriebsvereinbarung "Lebensphasengerechte Arbeitszeit":
   - Flexible Verteilung von Soll-Stunden, Gleitzeitrahmen (z.B. Kernarbeitszeit 9–15 Uhr).
   - Option auf Korridormodell (unterschiedliche Wochenarbeitszeiten innerhalb eines Jahres).`,
@@ -80,7 +80,7 @@ const knowledgeChunks = [
     topic: 'Altersteilzeit',
     keywords: ['altersteilzeit', 'alter', 'rente', 'blockmodell', 'freistellung', 'vorruhestand'],
     content: `## Altersteilzeit
-- NOVENTIS-Tarifvertrag "Altersteilzeit": ab 55 Jahren, mind. 60 Monate Betriebszugehörigkeit.
+- VOLKSWAGEN-Tarifvertrag "Altersteilzeit": ab 55 Jahren, mind. 60 Monate Betriebszugehörigkeit.
 - **Blockmodell:** Erst Vollzeitphase, dann Freistellungsphase.
 - **Gleichmäßig (1:1-Modell):** Halbierung der Arbeitszeit für gesamten Zeitraum.
 - Zuschussregelungen: Arbeitgeberzuschuss bis zu 20% der Brutto-Bezüge während der Arbeitsphase.
@@ -91,7 +91,7 @@ const knowledgeChunks = [
     topic: 'Sabbatical / Langzeitkonto',
     keywords: ['sabbatical', 'langzeitkonto', 'auszeit', 'freistellung', 'ansparen'],
     content: `## Sabbatical / Langzeitkonto
-- NOVENTIS-Betriebsvereinbarung "Arbeitszeitkonto" und Tarifvertrag Langzeitkonto (TV-LZK).
+- VOLKSWAGEN-Betriebsvereinbarung "Arbeitszeitkonto" und Tarifvertrag Langzeitkonto (TV-LZK).
 - **Überstundenguthaben:** Freizeitausgleich durch Anwesenheitskonto.
 - **Entgeltguthaben:** Ansparen von Gehalt für späteres Sabbatical.
 - Formular im HR-Portal – Genehmigung durch Führungskraft und HR-Kontrolle.
@@ -104,14 +104,14 @@ const knowledgeChunks = [
     content: `## Mobile Arbeit
 - BV "Mobile Arbeit": Home-Office-Regelungen, Höchstgrenzen, Spesen.
 - Abstimmung der Home-Office-Tage mit der Führungskraft.
-- IT-Ausstattung wird durch NOVENTIS gestellt.`,
+- IT-Ausstattung wird durch VOLKSWAGEN gestellt.`,
   },
   {
     id: 'hr-services',
     topic: 'HR Self-Services',
     keywords: ['portal', 'self-service', 'sap', 'successfactors', 'formulare', 'antrag', 'system'],
     content: `## HR-Self-Services
-- SAP SuccessFactors: NOVENTIS-Portal für alle Anträge und Formulare.
+- SAP SuccessFactors: VOLKSWAGEN-Portal für alle Anträge und Formulare.
 - Betriebsrat & Job-Center: Beratung und Unterstützung bei allen Lebensphasenmodellen.
 - BV Überstundenausgleich: Tarifliche Freizeitausgleichsquoten.`,
   },
