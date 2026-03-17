@@ -121,10 +121,6 @@ function createTools(db, openaiClient) {
           employee = await SELECT.one.from(Employees).where({ personnelNumber });
         } else if (lastName && firstName) {
           employee = await SELECT.one.from(Employees).where({ lastName, firstName });
-          if (!employee) {
-            // Fallback: nur Nachname, falls Vorname nicht exakt matcht
-            employee = await SELECT.one.from(Employees).where({ lastName });
-          }
         } else if (lastName) {
           employee = await SELECT.one.from(Employees).where({ lastName });
         } else {

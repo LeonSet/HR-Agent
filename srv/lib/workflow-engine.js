@@ -65,7 +65,7 @@ async function classifyIntent(msg, openai, model) {
           { role: 'system', content: INTENT_SYSTEM_PROMPT },
           { role: 'user', content: msg },
         ],
-        max_completion_tokens: 20,
+        max_completion_tokens: 50,
       });
 
       const raw = (completion.choices[0]?.message?.content || '').trim().toLowerCase();
