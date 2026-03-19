@@ -1,7 +1,7 @@
 import '../styles/Topbar.css';
 
 const NAV_ITEMS = [
-  'ME@NOVENTIS',
+  'ME@VOLKSWAGEN',
   'MEINE MITARBEITER',
   'MEIN BETREUUNGSBEREICH',
   'HR PROZESSE',
