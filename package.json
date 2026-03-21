@@ -5,7 +5,7 @@
   "dependencies": {
     "@sap/cds": "^9",
     "express": "^4",
-    "multer": "^1",
+    "multer": "^2.1.1",
     "openai": "^6.29.0",
     "pdf-parse": "^1.1.1"
   },
