@@ -1,0 +1,113 @@
+name: Deploy HR-Agent
+
+on:
+  push:
+    branches:
+      - main      # → Staging (automatisch)
+      - production # → Production (geschützter Branch)
+
+permissions:
+  contents: read
+  packages: write   # Für GHCR-Push via GITHUB_TOKEN
+
+jobs:
+  test:
+    name: Test
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: self-hosted
+    needs: test
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: |
+          if [[ "${{ github.ref_name }}" == "production" ]]; then
+            echo "tag=prod-${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "latest_tag=prod" >> $GITHUB_OUTPUT
+            echo "env=prod" >> $GITHUB_OUTPUT
+          else
+            echo "tag=staging-${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "latest_tag=staging" >> $GITHUB_OUTPUT
+            echo "env=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ghcr.io/leonset/hr-agent:${{ steps.meta.outputs.tag }} \
+            -t ghcr.io/leonset/hr-agent:${{ steps.meta.outputs.latest_tag }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/leonset/hr-agent:${{ steps.meta.outputs.tag }}
+          docker push ghcr.io/leonset/hr-agent:${{ steps.meta.outputs.latest_tag }}
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: self-hosted
+    needs: build-and-push
+    if: github.ref_name == 'main'
+    environment: staging
+    steps:
+      - name: Pull & restart staging
+        working-directory: /Users/anton/hybris-solutions/environments/staging/compose/hr-agent
+        run: |
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
+
+      - name: Wait for health check
+        run: |
+          echo "Warte auf Health-Check..."
+          for i in $(seq 1 12); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' hr-agent-staging 2>/dev/null || echo "not_found")
+            echo "  [${i}/12] Status: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Container ist healthy!"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timeout: Container nicht healthy nach 60s"
+          docker logs --tail 50 hr-agent-staging
+          exit 1
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: self-hosted
+    needs: build-and-push
+    if: github.ref_name == 'production'
+    environment: production  # requires manual approval in GitHub
+    steps:
+      - name: Pull & restart production
+        working-directory: /Users/anton/hybris-solutions/environments/prod/compose/hr-agent
+        run: |
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
