@@ -206,6 +206,19 @@ cds.on('bootstrap', (app) => {
       return res.status(500).json({ error: err.message });
     }
   });
+
+  // ─── Health-Check ─────────────────────────────────────────────────────────
+  app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+  // ─── Static Frontend (Production only) ────────────────────────────────────
+  if (process.env.NODE_ENV === 'production') {
+    const path = require('path');
+    app.use(express.static(path.join(__dirname, 'app/dist')));
+    // SPA-Fallback: alle Nicht-API-Routen an index.html
+    app.get(/^(?!\/api|\/odata|\/health).*$/, (req, res) => {
+      res.sendFile(path.join(__dirname, 'app/dist/index.html'));
+    });
+  }
 });
 
 module.exports = cds.server;
